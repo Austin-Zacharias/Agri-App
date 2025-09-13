@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agri-app</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fc;
+        }
+        .container {
+            max-width: 800px;
+        }
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: #4a90e2;
+            animation: spin 1s ease infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .listening-animation {
+            animation: pulse-ring 1.2s cubic-bezier(0.215, 0.610, 0.355, 1) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.33); }
+            80%, 100% { opacity: 0; }
+        }
+        .pulse-dot {
+            animation: pulse-dot 1.2s cubic-bezier(0.455, 0.03, 0.515, 0.955) -.4s infinite;
+        }
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        .loading-animation {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #10b981;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        .chat-message {
+            max-width: 80%;
+            padding: 0.75rem;
+            border-radius: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        .user-message {
+            background-color: #d1fae5;
+            align-self: flex-end;
+            margin-left: auto;
+        }
+        .bot-message {
+            background-color: #e5e7eb;
+            align-self: flex-start;
+            margin-right: auto;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <header class="w-full max-w-4xl p-6 mb-8 rounded-xl text-center shadow-lg text-white bg-gradient-to-r from-green-500 to-green-700">
+        <div class="flex items-center justify-center space-x-2 mb-2">
+            <i class="fas fa-seedling text-3xl"></i>
+            <h1 class="text-3xl font-bold">Agri-app</h1>
+        </div>
+        <p class="text-lg">Your AI-powered guide for all things agriculture.</p>
+    </header>
+
+    <div id="app" class="bg-white rounded-2xl shadow-xl w-full p-6 space-y-6 container text-center">
+        <!-- Dynamic content will be loaded here -->
+    </div>
+
+    <footer class="mt-8 text-center text-gray-400 text-xs">
+        <p>&copy; 2025 Agri-app. All rights reserved.</p>
+    </footer>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, onSnapshot, query, where, orderBy, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const apiKey = 'AIzaSyBMsv_KIFUB86vI-9laR14h_u6tHy7Cu-o';
+        let db, auth, userId;
+        const appDiv = document.getElementById('app');
+
+        const backButton = `<button onclick="renderFeature('home')" class="absolute top-4 left-4 text-gray-500 hover:text-gray-700 transition-colors duration-200">
+            <i class="fas fa-arrow-left text-2xl"></i>
+        </button>`;
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        let recognition = null;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = false;
+            recognition.lang = 'en-US';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+        }
+
+        const strings = {
+            en: {
+                loading: 'Getting Your Location...',
+                loadingPermission: 'Please allow location access to continue.',
+                weatherError: 'Could not get weather data. Please try again.',
+                geoError: 'Could not get your location. Please ensure GPS is enabled.',
+                recommendationTitle: 'Recommended Crops',
+                weatherAlertTitle: 'Real-Time Weather Alert',
+                forecastTitle: '5-Day Forecast',
+                temperature: 'Temperature',
+                humidity: 'Humidity',
+                condition: 'Condition',
+                wind: 'Wind Speed',
+                celsius: '°C',
+                kph: 'km/h',
+                language: 'Language',
+                title: 'Agri-app',
+                aiTipsButton: '✨ Get AI Tips',
+                aiTipsTitle: 'Farming Tips & Reminders',
+                aiTipsPlaceholder: 'Tap the button to get personalized farming tips and irrigation reminders from a specialized AI.',
+                aiTipsLoading: 'Getting AI Tips...',
+                aiTipsError: 'Error fetching AI tips. Please try again.',
+                recommendationPrompt: (temp, desc, humidity) => `You are a professional agricultural consultant. Based on the following weather conditions: temperature is ${temp}°C, description is ${desc}, and humidity is ${humidity}%. Provide a detailed, context-aware watering schedule for common crops in a dry region. Include a flood/drought warning and tips for conserving water. Respond with a JSON object with the following fields: "intro", "watering_schedule" (as an array of strings), and "warnings_and_tips" (as an array of strings).`,
+                saveTitle: 'Save Your Recommendations',
+                savePlaceholder: 'Enter a crop or tip to save...',
+                saveButton: 'Save to My Crops',
+                savedCropsTitle: 'My Saved Crops',
+                soilButton: '🔬 Get Soil & Crop Insights',
+                soilTitle: 'Soil & Crop Insights',
+                soilPlaceholder: 'Tap the button to get detailed soil information and crop recommendations for your location.',
+                soilLoading: 'Analyzing soil...',
+                soilError: 'Error fetching soil data. Please try again.',
+                soilPrompt: (location) => `You are a professional soil scientist and agricultural expert. Provide a detailed analysis of the soil type and characteristics (e.g., pH, nutrient content) in the location of "${location}". Also, provide a list of suitable crops for this soil. Structure your response with clear headings for "Soil Analysis", "Characteristics", and "Suitable Crops".`,
+                voiceControl: 'Voice Command',
+                voicePlaceholder: 'Tap the mic and say "Get tips" or "Get soil"',
+                voiceListening: 'Listening...',
+                home: {
+                    title: 'Choose a feature',
+                    weather: { name: 'Weather', desc: 'Check live weather based on your location', icon: 'fas fa-cloud-sun' },
+                    soil: { name: 'Soil & Crop Insights', desc: 'Get detailed soil and crop recommendations', icon: 'fas fa-flask' },
+                    voice: { name: 'Voice Assistant', desc: 'Use voice commands to control the app', icon: 'fas fa-microphone-alt' },
+                    chat: { name: 'Farming Assistant', desc: 'Chat about crops, soil, and weather', icon: 'fas fa-comments' },
+                    jobs: { name: 'Job Board', desc: 'Post or search local jobs', icon: 'fas fa-briefcase' },
+                    plant: { name: 'Plant Detector', desc: 'Identify plants in real-time using your camera', icon: 'fas fa-leaf' }
+                },
+                chat: {
+                    title: 'Farming Assistant',
+                    placeholder: 'Type your message...',
+                    send: 'Send',
+                    noApiKey: 'Sorry, the AI assistant is not available. API key is missing. Please contact support.'
+                },
+                jobs: {
+                    title: 'Job Board',
+                    postJob: 'Post a New Job',
+                    jobTitle: 'Job Title',
+                    jobDesc: 'Job Description',
+                    contact: 'Contact Info',
+                    post: 'Post Job',
+                    noJobs: 'No jobs posted yet.',
+                    jobsTitle: 'Local Jobs'
+                }
+            },
+            // Simplified Hindi strings for example
+            hi: {
+                 loading: 'आपका स्थान प्राप्त किया जा रहा है...',
+                 loadingPermission: 'जारी रखने के लिए कृपया स्थान पहुंच की अनुमति दें।',
+                 weatherError: 'मौसम का डेटा नहीं मिला। कृपया पुनः प्रयास करें।',
+                 geoError: 'आपका स्थान नहीं मिला। कृपया जीपीएस चालू करें।',
+                 recommendationTitle: 'अनुशंसित फसलें',
+                 weatherAlertTitle: 'वास्तविक समय मौसम अलर्ट',
+                 forecastTitle: '5-दिन का पूर्वानुमान',
+                 temperature: 'तापमान',
+                 humidity: 'आर्द्रता',
+                 condition: 'अवस्था',
+                 wind: 'हवा की गति',
+                 celsius: '°C',
+                 kph: 'किमी/घंटा',
+                 language: 'भाषा',
+                 title: 'एग्री-ऐप',
+                 aiTipsButton: '✨ एआई सुझाव प्राप्त करें',
+                 aiTipsTitle: 'खेती के सुझाव और अनुस्मारक',
+                 aiTipsPlaceholder: 'व्यक्तिगत खेती के सुझाव और सिंचाई अनुस्मारक प्राप्त करने के लिए बटन टैप करें।',
+                 aiTipsLoading: 'एआई सुझाव प्राप्त किए जा रहे हैं...',
+                 aiTipsError: 'एआई सुझाव प्राप्त करने में त्रुटि। कृपया पुनः प्रयास करें।',
+                 recommendationPrompt: (temp, desc, humidity) => `आप एक पेशेवर कृषि सलाहकार हैं। निम्नलिखित मौसम की स्थिति के आधार पर: तापमान ${temp}°C है, वर्णन ${desc} है, और आर्द्रता ${humidity}% है। सूखे क्षेत्र में सामान्य फसलों के लिए एक विस्तृत, संदर्भ-जागरूक सिंचाई अनुसूची प्रदान करें। जल संरक्षण के लिए बाढ़/सूखा चेतावनी और सुझाव शामिल करें। निम्नलिखित फ़ील्ड के साथ एक JSON ऑब्जेक्ट के रूप में उत्तर दें: "intro", "watering_schedule" (स्ट्रिंग्स की एक सरणी के रूप में), और "warnings_and_tips" (स्ट्रिंग्स की एक सरणी के रूप में)।`,
+                 saveTitle: 'अपनी सिफारिशें सहेजें',
+                 savePlaceholder: 'सहेजने के लिए कोई फसल या सुझाव दर्ज करें...',
+                 saveButton: 'मेरी फसलों में सहेजें',
+                 savedCropsTitle: 'मेरी सहेजी गई फसलें',
+                 soilButton: '🔬 मिट्टी और फसल की जानकारी प्राप्त करें',
+                 soilTitle: 'मिट्टी और फसल की जानकारी',
+                 soilPlaceholder: 'अपने स्थान के लिए विस्तृत मिट्टी की जानकारी और फसल की सिफारिशें प्राप्त करने के लिए बटन टैप करें।',
+                 soilLoading: 'मिट्टी का विश्लेषण हो रहा है...',
+                 soilError: 'मिट्टी का डेटा प्राप्त करने में त्रुटि। कृपया पुनः प्रयास करें।',
+                 soilPrompt: (location) => `आप एक पेशेवर मिट्टी वैज्ञानिक और कृषि विशेषज्ञ हैं। "${location}" स्थान में मिट्टी के प्रकार और विशेषताओं (जैसे पीएच, पोषक तत्व सामग्री) का विस्तृत विश्लेषण प्रदान करें। साथ ही, इस मिट्टी के लिए उपयुक्त फसलों की सूची भी प्रदान करें। "मिट्टी का विश्लेषण", "विशेषताएं", और "उपयुक्त फसलें" के लिए स्पष्ट शीर्षक के साथ अपनी प्रतिक्रिया को संरचित करें।`,
+                 voiceControl: 'वॉयस कमांड',
+                 voicePlaceholder: 'माइक टैप करें और "सुझाव प्राप्त करें" या "मिट्टी" कहें',
+                 voiceListening: 'सुन रहा है...',
+                 home: {
+                    title: 'एक सुविधा चुनें',
+                    weather: { name: 'मौसम', desc: 'अपने स्थान के आधार पर लाइव मौसम की जाँच करें', icon: 'fas fa-cloud-sun' },
+                    soil: { name: 'मिट्टी और फसल', desc: 'विस्तृत मिट्टी और फसल की सिफारिशें प्राप्त करें', icon: 'fas fa-flask' },
+                    voice: { name: 'वॉयस असिस्टेंट', desc: 'ऐप को नियंत्रित करने के लिए वॉयस कमांड का उपयोग करें', icon: 'fas fa-microphone-alt' },
+                    chat: { name: 'कृषि सहायक', desc: 'फसलों, मिट्टी और मौसम के बारे में चैट करें', icon: 'fas fa-comments' },
+                    jobs: { name: 'जॉब बोर्ड', desc: 'स्थानीय नौकरियां पोस्ट करें या खोजें', icon: 'fas fa-briefcase' },
+                    plant: { name: 'प्लांट डिटेक्टर', desc: 'अपने कैमरे का उपयोग करके वास्तविक समय में पौधों की पहचान करें', icon: 'fas fa-leaf' }
+                },
+                chat: {
+                    title: 'कृषि सहायक',
+                    placeholder: 'अपना संदेश टाइप करें...',
+                    send: 'भेजें',
+                    noApiKey: 'क्षमा करें, एआई सहायक उपलब्ध नहीं है। एपीआई कुंजी गायब है। कृपया सहायता से संपर्क करें।'
+                },
+                jobs: {
+                    title: 'जॉब बोर्ड',
+                    postJob: 'नई नौकरी पोस्ट करें',
+                    jobTitle: 'नौकरी का शीर्षक',
+                    jobDesc: 'नौकरी का विवरण',
+                    contact: 'संपर्क जानकारी',
+                    post: 'नौकरी पोस्ट करें',
+                    noJobs: 'अभी तक कोई नौकरी पोस्ट नहीं की गई है।',
+                    jobsTitle: 'स्थानीय नौकरियां'
+                }
+            }
+        };
+
+        const cropRecommendations = {
+            'hot': 'Maize, Groundnuts, Millets',
+            'cold': 'Wheat, Barley, Peas',
+            'rainy': 'Paddy (Rice), Jute, Sugarcane',
+            'sunny': 'Tomatoes, Chilies, Beans',
+            'moderate': 'Potatoes, Onions, Cabbage',
+            'default': 'Please check local guidance for your region.'
+        };
+        let currentStrings;
+        let currentWeatherData;
+        let chatHistory = [];
+
+        const fetchWithBackoff = async (url, options, retries = 3, delay = 1000) => {
+            if (!apiKey) {
+                throw new Error("API key is missing.");
+            }
+            try {
+                const response = await fetch(url, options);
+                if (response.status === 429 && retries > 0) {
+                    console.log(`Rate limit exceeded. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithBackoff(url, options, retries - 1, delay * 2);
+                }
+                if (!response.ok) {
+                    throw new Error(`API call failed with status: ${response.status}`);
+                }
+                return response;
+            } catch (error) {
+                if (retries > 0) {
+                    console.log(`Fetch error. Retrying in ${delay / 1000}s...`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return fetchWithBackoff(url, options, retries - 1, delay * 2);
+                }
+                throw error;
+            }
+        };
+
+        // Main rendering function
+        const renderFeature = async (featureName) => {
+            appDiv.innerHTML = '';
+            
+            switch (featureName) {
+                case 'home':
+                    appDiv.innerHTML = `
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                            ${Object.keys(currentStrings.home).filter(k => k !== 'title').map(key => `
+                                <div onclick="renderFeature('${key}')" class="bg-gray-50 p-6 rounded-2xl shadow-md flex flex-col items-center justify-center space-y-2 cursor-pointer transition-transform duration-200 hover:scale-105 hover:shadow-lg">
+                                    <i class="${currentStrings.home[key].icon} text-3xl text-green-600"></i>
+                                    <h3 class="text-xl font-bold text-gray-800">${currentStrings.home[key].name}</h3>
+                                    <p class="text-sm text-gray-500 text-center">${currentStrings.home[key].desc}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                    break;
+                case 'weather':
+                    appDiv.innerHTML = `<div class="w-full text-center">
+                        ${backButton}
+                        <div class="flex flex-col items-center justify-center p-8 bg-green-50 rounded-lg">
+                            <i class="fas fa-map-marker-alt text-4xl text-green-600 animate-pulse"></i>
+                            <h2 class="mt-4 text-xl font-semibold text-gray-700">${currentStrings.loading}</h2>
+                            <p class="text-sm text-gray-500 mt-2">${currentStrings.loadingPermission}</p>
+                        </div>
+                    </div>`;
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(onPositionSuccess, onPositionError);
+                    } else {
+                        showMessageBox('Geolocation Not Supported', 'Your browser does not support geolocation.');
+                    }
+                    break;
+                case 'soil':
+                    appDiv.innerHTML = `<div class="w-full text-center relative">
+                        ${backButton}
+                        <h2 class="text-2xl font-bold mb-4 text-purple-700">${currentStrings.soilTitle}</h2>
+                        <div id="soil-tips" class="bg-purple-50 p-6 rounded-xl shadow-md text-gray-800">
+                            <p>${currentStrings.soilPlaceholder}</p>
+                        </div>
+                        <button id="get-soil-btn" class="mt-4 w-full bg-purple-500 text-white py-3 rounded-lg font-semibold hover:bg-purple-600 transition-colors duration-200">
+                            ${currentStrings.soilButton}
+                        </button>
+                    </div>`;
+                    document.getElementById('get-soil-btn').addEventListener('click', getSoilTips);
+                    break;
+                case 'voice':
+                    appDiv.innerHTML = `<div class="w-full text-center relative">
+                        ${backButton}
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">${currentStrings.voiceControl}</h2>
+                        <div class="bg-gray-200 p-6 rounded-xl shadow-md">
+                            <div class="flex flex-col items-center justify-center">
+                                <p id="voice-status" class="text-gray-500 mb-4">${currentStrings.voicePlaceholder}</p>
+                                <button id="voice-btn" class="relative w-16 h-16 rounded-full bg-gray-600 text-white flex items-center justify-center transition-colors duration-200 hover:bg-gray-700">
+                                    <div class="absolute w-full h-full rounded-full border-4 border-gray-400 listening-animation"></div>
+                                    <i class="fas fa-microphone text-xl pulse-dot"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>`;
+                    if (SpeechRecognition) {
+                        setupVoiceRecognition();
+                    }
+                    break;
+                case 'chat':
+                    appDiv.innerHTML = `<div class="w-full h-full flex flex-col relative">
+                        ${backButton}
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">${currentStrings.chat.title}</h2>
+                        <div id="chat-window" class="flex-grow bg-gray-100 p-4 rounded-xl overflow-y-auto mb-4 border border-gray-300 flex flex-col items-start" style="height: 400px;"></div>
+                        <div class="flex">
+                            <textarea id="prompt-input" rows="1" placeholder="${currentStrings.chat.placeholder}" class="flex-grow p-3 rounded-l-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-500 resize-none"></textarea>
+                            <button id="submit-btn" class="bg-green-500 text-white p-3 rounded-r-lg font-semibold hover:bg-green-600 transition-colors duration-200">
+                                ${currentStrings.chat.send}
+                            </button>
+                        </div>
+                    </div>`;
+                    document.getElementById('submit-btn').addEventListener('click', sendChatMessage);
+                    document.getElementById('prompt-input').addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            sendChatMessage();
+                        }
+                    });
+                    break;
+                case 'jobs':
+                    appDiv.innerHTML = `<div class="w-full relative">
+                        ${backButton}
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">${currentStrings.jobs.title}</h2>
+                        <div id="jobs-container" class="space-y-4">
+                            <!-- Job listings will be loaded here -->
+                        </div>
+                        <div class="mt-8 p-6 bg-blue-100 rounded-xl shadow-md">
+                            <h3 class="text-xl font-bold mb-4">${currentStrings.jobs.postJob}</h3>
+                            <input type="text" id="job-title" placeholder="${currentStrings.jobs.jobTitle}" class="w-full p-2 mb-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <textarea id="job-desc" placeholder="${currentStrings.jobs.jobDesc}" rows="3" class="w-full p-2 mb-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                            <input type="text" id="job-contact" placeholder="${currentStrings.jobs.contact}" class="w-full p-2 mb-4 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <button id="post-job-btn" class="w-full bg-blue-500 text-white py-2 rounded-lg font-semibold hover:bg-blue-600 transition-colors duration-200">${currentStrings.jobs.post}</button>
+                        </div>
+                    </div>`;
+                    document.getElementById('post-job-btn').addEventListener('click', postJob);
+                    loadJobs();
+                    break;
+                case 'plant':
+                    appDiv.innerHTML = `<div class="w-full text-center relative">
+                        ${backButton}
+                        <h2 class="text-2xl font-bold mb-4 text-gray-800">${currentStrings.home.plant.name}</h2>
+                        <div class="bg-gray-100 p-8 rounded-xl">
+                            <i class="fas fa-camera text-6xl text-gray-400 mb-4"></i>
+                            <p class="text-lg text-gray-600">${currentStrings.home.plant.desc}</p>
+                            <p class="mt-4 text-gray-500">Feature not yet implemented. Please check back later!</p>
+                        </div>
+                    </div>`;
+                    break;
+            }
+        };
+
+        const onPositionSuccess = (position) => {
+            const { latitude, longitude } = position.coords;
+            fetchWeather(latitude, longitude);
+        };
+
+        const onPositionError = (error) => {
+            console.error('Geolocation Error:', error);
+            appDiv.innerHTML = `<div class="w-full text-center relative">
+                ${backButton}
+                <div class="flex flex-col items-center justify-center p-8 bg-red-50 rounded-lg">
+                    <i class="fas fa-exclamation-triangle text-4xl text-red-600"></i>
+                    <h2 class="mt-4 text-xl font-semibold text-gray-700">${currentStrings.geoError}</h2>
+                    <p class="text-sm text-gray-500 mt-2 text-center">${currentStrings.loadingPermission}</p>
+                </div>
+            </div>`;
+        };
+
+        const fetchWeather = async (lat, lon) => {
+            const openWeatherMapApiKey = '1c1eef0769c31ee8ba5027099fa47761';
+            const url = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${openWeatherMapApiKey}&units=metric`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                currentWeatherData = data;
+
+                const weatherCondition = data.weather[0].main.toLowerCase();
+                let recommendationKey = 'default';
+                if (weatherCondition.includes('rain')) recommendationKey = 'rainy';
+                else if (data.main.temp > 30) recommendationKey = 'hot';
+                else if (data.main.temp < 15) recommendationKey = 'cold';
+                else if (weatherCondition.includes('clear') || weatherCondition.includes('sun')) recommendationKey = 'sunny';
+                else recommendationKey = 'moderate';
+
+                const recommendedCrops = cropRecommendations[recommendationKey] || cropRecommendations.default;
+                const weatherIcon = getWeatherIcon(data.weather[0].icon);
+
+                appDiv.innerHTML = `<div class="space-y-4 relative">
+                    ${backButton}
+                    <div class="bg-blue-500 text-white p-6 rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold mb-2">${currentStrings.weatherAlertTitle}</h3>
+                        <div class="flex items-center justify-center space-x-4">
+                            <i class="${weatherIcon} text-5xl"></i>
+                            <div>
+                                <p class="text-4xl font-light">${data.main.temp}${currentStrings.celsius}</p>
+                                <p class="text-sm font-light">${data.name}, ${data.sys.country}</p>
+                            </div>
+                        </div>
+                        <div class="mt-4 text-left">
+                            <p class="text-md capitalize"><i class="fas fa-cloud-sun mr-2"></i> ${currentStrings.condition}: ${data.weather[0].description}</p>
+                            <p class="text-md"><i class="fas fa-wind mr-2"></i> ${currentStrings.wind}: ${data.wind.speed} ${currentStrings.kph}</p>
+                            <p class="text-md"><i class="fas fa-tint mr-2"></i> ${data.main.humidity}%</p>
+                        </div>
+                    </div>
+                    <div class="bg-blue-100 p-6 rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold mb-4 text-blue-700">${currentStrings.forecastTitle}</h3>
+                        <div id="forecast-container" class="grid grid-cols-2 sm:grid-cols-5 gap-4"></div>
+                    </div>
+                    <div class="bg-yellow-50 p-6 rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold mb-2 text-yellow-700">${currentStrings.recommendationTitle}</h3>
+                        <p class="text-gray-800">${recommendedCrops}</p>
+                    </div>
+                    <div class="bg-green-50 p-6 rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold mb-2 text-green-700">${currentStrings.aiTipsTitle}</h3>
+                        <div id="ai-tips" class="text-gray-800">
+                            <p>${currentStrings.aiTipsPlaceholder}</p>
+                        </div>
+                        <button id="get-tips-btn" class="mt-4 w-full bg-green-500 text-white py-3 rounded-lg font-semibold hover:bg-green-600 transition-colors duration-200">
+                            ${currentStrings.aiTipsButton}
+                        </button>
+                    </div>
+                    <div class="bg-gray-200 p-6 rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold mb-4 text-gray-800">${currentStrings.saveTitle}</h3>
+                        <div class="flex flex-col sm:flex-row gap-2 mb-4">
+                            <input type="text" id="save-input" placeholder="${currentStrings.savePlaceholder}" class="flex-grow p-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <button id="save-btn" class="bg-blue-500 text-white py-2 px-4 rounded-lg font-semibold hover:bg-blue-600 transition-colors duration-200">
+                                ${currentStrings.saveButton}
+                            </button>
+                        </div>
+                        <div id="saved-crops-container" class="text-left">
+                            <h4 class="text-lg font-bold mb-2 text-gray-700">${currentStrings.savedCropsTitle}</h4>
+                            <ul id="saved-crops-list" class="space-y-2"></ul>
+                        </div>
+                    </div>
+                </div>`;
+                document.getElementById('get-tips-btn').addEventListener('click', getAITips);
+                document.getElementById('save-btn').addEventListener('click', saveRecommendation);
+                loadSavedRecommendations();
+                fetchForecast(lat, lon);
+            } catch (error) {
+                console.error('Error fetching weather data:', error);
+                appDiv.innerHTML = `<div class="w-full text-center relative">
+                    ${backButton}
+                    <div class="flex flex-col items-center justify-center p-8 bg-red-50 rounded-lg">
+                        <i class="fas fa-exclamation-triangle text-4xl text-red-600"></i>
+                        <h2 class="mt-4 text-xl font-semibold text-gray-700">${currentStrings.weatherError}</h2>
+                    </div>
+                </div>`;
+            }
+        };
+
+        function getWeatherIcon(iconCode) {
+            switch (iconCode) {
+                case '01d': return 'fas fa-sun'; case '01n': return 'fas fa-moon';
+                case '02d': case '03d': case '04d': return 'fas fa-cloud-sun';
+                case '02n': case '03n': case '04n': return 'fas fa-cloud-moon';
+                case '09d': case '10d': return 'fas fa-cloud-showers-heavy';
+                case '09n': case '10n': return 'fas fa-cloud-showers-heavy';
+                case '11d': case '11n': return 'fas fa-bolt';
+                case '13d': case '13n': return 'fas fa-snowflake';
+                case '50d': case '50n': return 'fas fa-smog';
+                default: return 'fas fa-cloud';
+            }
+        }
+
+        const fetchForecast = async (lat, lon) => {
+            const openWeatherMapApiKey = '1c1eef0769c31ee8ba5027099fa47761';
+            const url = `https://api.openweathermap.org/data/2.5/forecast?lat=${lat}&lon=${lon}&appid=${openWeatherMapApiKey}&units=metric`;
+            const forecastContainer = document.getElementById('forecast-container');
+            if (!forecastContainer) return;
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const data = await response.json();
+                const dailyForecast = {};
+                data.list.forEach(item => {
+                    const date = new Date(item.dt * 1000);
+                    const day = date.toLocaleDateString(undefined, { weekday: 'short' });
+                    if (!dailyForecast[day]) dailyForecast[day] = item;
+                });
+                forecastContainer.innerHTML = '';
+                Object.values(dailyForecast).slice(0, 5).forEach(item => {
+                    const day = new Date(item.dt * 1000).toLocaleDateString(undefined, { weekday: 'short' });
+                    const temp = Math.round(item.main.temp);
+                    const iconClass = getWeatherIcon(item.weather[0].icon);
+                    forecastContainer.innerHTML += `
+                        <div class="flex flex-col items-center bg-white p-3 rounded-lg shadow-md">
+                            <span class="text-sm font-semibold text-gray-600">${day}</span>
+                            <i class="${iconClass} text-2xl my-2 text-blue-500"></i>
+                            <span class="text-lg font-bold text-gray-800">${temp}°C</span>
+                        </div>`;
+                });
+            } catch (error) {
+                console.error('Error fetching forecast data:', error);
+                forecastContainer.innerHTML = `<p class="text-red-500 text-center col-span-5">${currentStrings.weatherError}</p>`;
+            }
+        };
+
+        const getAITips = async () => {
+            const tipsDiv = document.getElementById('ai-tips');
+            const getTipsBtn = document.getElementById('get-tips-btn');
+            if (!tipsDiv || !getTipsBtn || !currentWeatherData) return;
+            if (!apiKey) {
+                tipsDiv.innerHTML = `<p class="text-red-500">${currentStrings.chat.noApiKey}</p>`;
+                return;
+            }
+            getTipsBtn.innerHTML = `<div class="spinner"></div>`;
+            getTipsBtn.disabled = true;
+            const prompt = currentStrings.recommendationPrompt(currentWeatherData.main.temp, currentWeatherData.weather[0].description, currentWeatherData.main.humidity);
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const payload = {
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseMimeType: "application/json",
+                    responseSchema: {
+                        type: "OBJECT",
+                        properties: {
+                            "intro": { "type": "STRING" },
+                            "watering_schedule": { "type": "ARRAY", "items": { "type": "STRING" } },
+                            "warnings_and_tips": { "type": "ARRAY", "items": { "type": "STRING" } }
+                        }
+                    }
+                }
+            };
+            try {
+                const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!response.ok) throw new Error(`API error! status: ${response.status}`);
+                const result = await response.json();
+                const jsonText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                const aiTips = JSON.parse(jsonText);
+                tipsDiv.innerHTML = `<p class="mb-4">${aiTips.intro}</p><h4 class="text-lg font-bold text-green-800 mb-2">Watering Schedule:</h4><ul class="list-disc list-inside text-left mb-4">${aiTips.watering_schedule.map(item => `<li>${item}</li>`).join('')}</ul><h4 class="text-lg font-bold text-green-800 mb-2">Warnings & Tips:</h4><ul class="list-disc list-inside text-left">${aiTips.warnings_and_tips.map(item => `<li>${item}</li>`).join('')}</ul>`;
+            } catch (error) {
+                console.error('Error fetching AI tips:', error);
+                tipsDiv.innerHTML = `<p>${currentStrings.aiTipsError}</p>`;
+            } finally {
+                getTipsBtn.innerHTML = currentStrings.aiTipsButton;
+                getTipsBtn.disabled = false;
+            }
+        };
+
+        const formatAIText = (text) => {
+            const lines = text.split('\n');
+            let html = '';
+            let inList = false;
+            lines.forEach(line => {
+                const trimmedLine = line.trim();
+                if (!trimmedLine) { if (inList) { html += '</ul>'; inList = false; } return; }
+                if (trimmedLine.match(/^#+\s/)) {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    const headingText = trimmedLine.replace(/^#+\s*/, '');
+                    html += `<h4 class="text-lg font-bold text-purple-800 mt-4 mb-2">${headingText}</h4>`;
+                } else if (trimmedLine.match(/^\s*\*\*(.*?)\*\*(:|$)/)) {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    const headingText = trimmedLine.replace(/^\s*\*\*(.*?)\*\*.*$/, '$1');
+                    html += `<h4 class="text-lg font-bold text-purple-800 mt-4 mb-2">${headingText}</h4>`;
+                } else if (trimmedLine.startsWith('*') || trimmedLine.startsWith('-')) {
+                    const listItemText = trimmedLine.replace(/[*-\s]+/, '');
+                    if (!inList) { html += '<ul class="list-disc list-inside text-left">'; inList = true; }
+                    html += `<li>${listItemText}</li>`;
+                } else {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    html += `<p class="mb-2">${trimmedLine}</p>`;
+                }
+            });
+            if (inList) html += '</ul>';
+            return html;
+        };
+
+        const getSoilTips = async () => {
+            const soilTipsDiv = document.getElementById('soil-tips');
+            const getSoilBtn = document.getElementById('get-soil-btn');
+            if (!soilTipsDiv || !getSoilBtn || !currentWeatherData) return;
+            if (!apiKey) {
+                soilTipsDiv.innerHTML = `<p class="text-red-500">${currentStrings.chat.noApiKey}</p>`;
+                return;
+            }
+            getSoilBtn.innerHTML = `<div class="spinner"></div>`;
+            getSoilBtn.disabled = true;
+            const location = currentWeatherData.name;
+            const prompt = currentStrings.soilPrompt(location);
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const payload = { contents: [{ parts: [{ text: prompt }] }], tools: [{ "google_search": {} }] };
+            try {
+                const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!response.ok) throw new Error(`API error! status: ${response.status}`);
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (text) {
+                    const formattedHtml = formatAIText(text);
+                    soilTipsDiv.innerHTML = formattedHtml;
+                } else {
+                    throw new Error("No content received from the API.");
+                }
+            } catch (error) {
+                console.error('Error fetching soil tips:', error);
+                soilTipsDiv.innerHTML = `<p>${currentStrings.soilError}</p>`;
+            } finally {
+                getSoilBtn.innerHTML = currentStrings.soilButton;
+                getSoilBtn.disabled = false;
+            }
+        };
+
+        const saveRecommendation = async () => {
+            const inputElement = document.getElementById('save-input');
+            const saveBtn = document.getElementById('save-btn');
+            if (!inputElement || !saveBtn) return;
+            const text = inputElement.value.trim();
+            if (text && userId) {
+                saveBtn.disabled = true;
+                try {
+                    const recCollection = collection(db, `artifacts/${appId}/users/${userId}/recommendations`);
+                    await addDoc(recCollection, { text: text, timestamp: Date.now() });
+                    inputElement.value = '';
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                } finally {
+                    saveBtn.disabled = false;
+                }
+            }
+        };
+
+        const loadSavedRecommendations = () => {
+            if (!userId || !db) return;
+            const recList = document.getElementById('saved-crops-list');
+            if (!recList) return;
+            const recCollection = collection(db, `artifacts/${appId}/users/${userId}/recommendations`);
+            const q = query(recCollection, orderBy("timestamp", "desc"));
+            onSnapshot(q, (snapshot) => {
+                if (recList) {
+                    recList.innerHTML = '';
+                    if (snapshot.docs.length === 0) {
+                        recList.innerHTML = `<li class="text-gray-500">No saved recommendations yet.</li>`;
+                    }
+                    snapshot.forEach(doc => {
+                        const data = doc.data();
+                        const li = document.createElement('li');
+                        li.textContent = data.text;
+                        li.className = "p-2 bg-white rounded-lg shadow-sm";
+                        recList.appendChild(li);
+                    });
+                }
+            }, (error) => {
+                console.error("Error loading saved recommendations: ", error);
+            });
+        };
+        
+        const setupVoiceRecognition = () => {
+            const voiceBtn = document.getElementById('voice-btn');
+            const voiceStatus = document.getElementById('voice-status');
+            if (!voiceBtn || !voiceStatus) return;
+            voiceBtn.addEventListener('click', () => {
+                recognition.start();
+                voiceStatus.textContent = currentStrings.voiceListening;
+                voiceBtn.classList.add('bg-green-500');
+                voiceBtn.classList.remove('bg-gray-600', 'hover:bg-gray-700');
+            });
+            recognition.onresult = (event) => {
+                const speechResult = event.results[0][0].transcript.toLowerCase();
+                voiceStatus.textContent = `You said: "${speechResult}"`;
+                if (speechResult.includes('tips')) {
+                    renderFeature('weather');
+                    setTimeout(() => document.getElementById('get-tips-btn').click(), 500);
+                } else if (speechResult.includes('soil')) {
+                    renderFeature('soil');
+                    setTimeout(() => document.getElementById('get-soil-btn').click(), 500);
+                }
+            };
+            recognition.onend = () => {
+                voiceStatus.textContent = currentStrings.voicePlaceholder;
+                voiceBtn.classList.remove('bg-green-500');
+                voiceBtn.classList.add('bg-gray-600', 'hover:bg-gray-700');
+            };
+            recognition.onerror = (event) => {
+                console.error('Speech recognition error:', event.error);
+                voiceStatus.textContent = `Error: ${event.error}`;
+                voiceBtn.classList.remove('bg-green-500');
+                voiceBtn.classList.add('bg-gray-600', 'hover:bg-gray-700');
+            };
+        };
+
+        const sendChatMessage = async () => {
+            const chatInput = document.getElementById('prompt-input');
+            const chatWindow = document.getElementById('chat-window');
+            const submitBtn = document.getElementById('submit-btn');
+
+            if (!chatInput || !chatWindow || !submitBtn) return;
+            const message = chatInput.value.trim();
+            if (!message) return;
+
+            if (!apiKey) {
+                const aiMessageDiv = document.createElement('div');
+                aiMessageDiv.className = "chat-message bot-message";
+                aiMessageDiv.textContent = currentStrings.chat.noApiKey;
+                chatWindow.appendChild(aiMessageDiv);
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+                chatInput.value = '';
+                return;
+            }
+
+            // Add user message to chat window
+            const userMessageDiv = document.createElement('div');
+            userMessageDiv.className = "chat-message user-message";
+            userMessageDiv.textContent = message;
+            chatWindow.appendChild(userMessageDiv);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            chatInput.value = '';
+            
+            // Add a placeholder for AI response and show loading indicator
+            const aiMessageDiv = document.createElement('div');
+            aiMessageDiv.className = "chat-message bot-message flex items-center";
+            aiMessageDiv.innerHTML = `<div class="loading-animation"></div>`;
+            chatWindow.appendChild(aiMessageDiv);
+            chatWindow.scrollTop = chatWindow.scrollHeight;
+            
+            submitBtn.disabled = true;
+
+            chatHistory.push({ role: 'user', parts: [{ text: message }] });
+
+            const systemPrompt = "You are a knowledgeable and friendly farming assistant. Provide clear, concise, and actionable advice to a farmer. Use simple language and always provide grounded information where possible.";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            
+            const payload = {
+                contents: chatHistory,
+                tools: [{ "google_search": {} }],
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+            };
+            
+            try {
+                const response = await fetchWithBackoff(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const result = await response.json();
+                const aiResponseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (aiResponseText) {
+                    chatHistory.push({ role: 'model', parts: [{ text: aiResponseText }] });
+                    aiMessageDiv.innerHTML = aiResponseText.replace(/\n/g, '<br>');
+                } else {
+                    aiMessageDiv.innerHTML = "Sorry, I could not get a response. Please try again.";
+                }
+
+            } catch (error) {
+                console.error('Chatbot error:', error);
+                aiMessageDiv.innerHTML = `An error occurred: ${error.message}. Please check your API key and try again.`;
+            } finally {
+                submitBtn.disabled = false;
+                chatWindow.scrollTop = chatWindow.scrollHeight;
+            }
+        };
+
+        const postJob = async () => {
+            const jobTitle = document.getElementById('job-title').value.trim();
+            const jobDesc = document.getElementById('job-desc').value.trim();
+            const jobContact = document.getElementById('job-contact').value.trim();
+            const postJobBtn = document.getElementById('post-job-btn');
+
+            if (jobTitle && jobDesc && jobContact && db) {
+                postJobBtn.disabled = true;
+                postJobBtn.innerHTML = `<i class="fas fa-spinner animate-spin"></i> Posting...`;
+                try {
+                    const jobsCollection = collection(db, `artifacts/${appId}/public/data/jobs`);
+                    await addDoc(jobsCollection, {
+                        title: jobTitle,
+                        description: jobDesc,
+                        contact: jobContact,
+                        timestamp: Date.now(),
+                        userId: userId
+                    });
+                    document.getElementById('job-title').value = '';
+                    document.getElementById('job-desc').value = '';
+                    document.getElementById('job-contact').value = '';
+                } catch (e) {
+                    console.error("Error adding document: ", e);
+                } finally {
+                    postJobBtn.disabled = false;
+                    postJobBtn.innerHTML = currentStrings.jobs.post;
+                }
+            }
+        };
+
+        const loadJobs = () => {
+            if (!db) return;
+            const jobsContainer = document.getElementById('jobs-container');
+            if (!jobsContainer) return;
+            const jobsCollection = collection(db, `artifacts/${appId}/public/data/jobs`);
+            const q = query(jobsCollection, orderBy("timestamp", "desc"));
+            
+            onSnapshot(q, (snapshot) => {
+                jobsContainer.innerHTML = `<h3 class="text-xl font-bold mb-2 text-gray-700">${currentStrings.jobs.jobsTitle}</h3>`;
+                if (snapshot.docs.length === 0) {
+                    jobsContainer.innerHTML += `<p class="text-gray-500">${currentStrings.jobs.noJobs}</p>`;
+                }
+                snapshot.forEach(doc => {
+                    const data = doc.data();
+                    jobsContainer.innerHTML += `
+                        <div class="bg-white p-4 rounded-xl shadow-md border border-gray-200">
+                            <h4 class="text-lg font-bold">${data.title}</h4>
+                            <p class="text-sm text-gray-700 mb-2">${data.description}</p>
+                            <p class="text-sm text-gray-500">Contact: ${data.contact}</p>
+                        </div>
+                    `;
+                });
+            }, (error) => {
+                console.error("Error loading jobs: ", error);
+            });
+        };
+
+        window.renderFeature = renderFeature;
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            currentStrings = strings.en;
+            if (Object.keys(firebaseConfig).length > 0) {
+                setLogLevel('Debug');
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        renderFeature('home');
+                    } else {
+                        try {
+                            if (initialAuthToken) {
+                                await signInWithCustomToken(auth, initialAuthToken);
+                            } else {
+                                await signInAnonymously(auth);
+                            }
+                        } catch (error) {
+                            console.error("Firebase Auth Error:", error);
+                        }
+                    }
+                });
+            } else {
+                console.log("Firebase not initialized. User data saving and job board features will not work.");
+                renderFeature('home');
+            }
+        });
+    </script>
+</body>
+</html>
